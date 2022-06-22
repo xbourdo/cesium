@@ -1112,8 +1112,7 @@ function createShaders(pointCloud, frameState, style) {
     vs += "    vec3 t2 = ((-e) + (a_positionLow - (t1 - e))) + a_position; \n";
     vs += "    vec3 high_delta = t1 + t2; \n";
     vs += "    vec3 low_delta = t2 - (high_delta - t1); \n";
-    vs +=
-      "    vec3 position = high_delta + low_delta + vec3(2.0, 2.0, 2.0); \n";
+    vs += "    vec3 position = high_delta + low_delta; \n";
   } else {
     vs += "    vec3 position = a_position; \n";
   }
