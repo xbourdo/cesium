@@ -323,6 +323,23 @@ function parsePositions(featureTable) {
       quantizedComponentDatatype: ComponentDatatype.UNSIGNED_SHORT,
       quantizedType: AttributeType.VEC3,
     };
+  } else if (defined(featureTableJson.POSITION_UINT32)) {
+    positions = featureTable.getPropertyArray(
+      "POSITION_UINT32",
+      ComponentDatatype.UNSIGNED_INT,
+      3
+    );
+
+    const positionsFloat64 = Float64Array.from(positions, (p) => p / 10000.0);
+
+    return {
+      name: VertexAttributeSemantic.POSITION,
+      semantic: VertexAttributeSemantic.POSITION,
+      typedArray: positionsFloat64,
+      isQuantized: false,
+      componentDatatype: ComponentDatatype.DOUBLE,
+      type: AttributeType.VEC3,
+    };
   }
 }
 

@@ -79,6 +79,7 @@ function PointCloud(options) {
   // These values are used to regenerate the shader when the style changes
   this._styleableShaderAttributes = undefined;
   this._isQuantized = false;
+  this._doublePrecision = false;
   this._isOctEncoded16P = false;
   this._isRGB565 = false;
   this._hasColors = false;
@@ -240,6 +241,9 @@ function initialize(pointCloud, options) {
   const positions = parsedContent.positions;
   if (defined(positions)) {
     pointCloud._isQuantized = positions.isQuantized;
+    pointCloud._doublePrecision =
+      ComponentDatatype.fromTypedArray(positions.typedArray) ===
+      ComponentDatatype.DOUBLE;
     pointCloud._quantizedVolumeScale = positions.quantizedVolumeScale;
     pointCloud._quantizedVolumeOffset = positions.quantizedVolumeOffset;
     pointCloud._quantizedRange = positions.quantizedRange;
@@ -379,6 +383,7 @@ function createResources(pointCloud, frameState) {
   const styleableProperties = parsedContent.styleableProperties;
   const hasStyleableProperties = defined(styleableProperties);
   const isQuantized = pointCloud._isQuantized;
+  const doublePrecision = pointCloud._doublePrecision;
   const isQuantizedDraco = pointCloud._isQuantizedDraco;
   const isOctEncoded16P = pointCloud._isOctEncoded16P;
   const isOctEncodedDraco = pointCloud._isOctEncodedDraco;
@@ -435,12 +440,70 @@ function createResources(pointCloud, frameState) {
     }
   }
 
-  const positionsVertexBuffer = Buffer.createVertexBuffer({
-    context: context,
-    typedArray: positions.typedArray,
-    usage: BufferUsage.STATIC_DRAW,
-  });
-  pointCloud._geometryByteLength += positionsVertexBuffer.sizeInBytes;
+  let attributes = [];
+  let attributeOffset = 0;
+
+  if (doublePrecision) {
+    attributeOffset = 1;
+
+    // Double precision emulation
+    // https://prideout.net/emulating-double-precision
+    const positionsHighFloat32 = Float32Array.from(positions.typedArray, (p) =>
+      Math.fround(p)
+    );
+    const positionsLowFloat32 = Float32Array.from(positions.typedArray, (p) =>
+      Math.fround(p - Math.fround(p))
+    );
+    const positionsVertexBuffer = Buffer.createVertexBuffer({
+      context: context,
+      typedArray: positionsHighFloat32,
+      usage: BufferUsage.STATIC_DRAW,
+    });
+    pointCloud._geometryByteLength += positionsVertexBuffer.sizeInBytes;
+
+    const positionsLowPartVertexBuffer = Buffer.createVertexBuffer({
+      context: context,
+      typedArray: positionsLowFloat32,
+      usage: BufferUsage.STATIC_DRAW,
+    });
+    pointCloud._geometryByteLength += positionsLowPartVertexBuffer.sizeInBytes;
+
+    attributes.push({
+      index: positionLocation,
+      vertexBuffer: positionsVertexBuffer,
+      componentsPerAttribute: 3,
+      componentDatatype: componentDatatype,
+      normalize: false,
+      offsetInBytes: 0,
+      strideInBytes: 0,
+    });
+    attributes.push({
+      index: positionLocation + 1,
+      vertexBuffer: positionsLowPartVertexBuffer,
+      componentsPerAttribute: 3,
+      componentDatatype: componentDatatype,
+      normalize: false,
+      offsetInBytes: 0,
+      strideInBytes: 0,
+    });
+  } else {
+    const positionsVertexBuffer = Buffer.createVertexBuffer({
+      context: context,
+      typedArray: positions.typedArray,
+      usage: BufferUsage.STATIC_DRAW,
+    });
+    pointCloud._geometryByteLength += positionsVertexBuffer.sizeInBytes;
+
+    attributes.push({
+      index: positionLocation,
+      vertexBuffer: positionsVertexBuffer,
+      componentsPerAttribute: 3,
+      componentDatatype: componentDatatype,
+      normalize: false,
+      offsetInBytes: 0,
+      strideInBytes: 0,
+    });
+  }
 
   let colorsVertexBuffer;
   if (hasColors) {
@@ -476,8 +539,6 @@ function createResources(pointCloud, frameState) {
     pointCloud._geometryByteLength += batchIdsVertexBuffer.sizeInBytes;
   }
 
-  let attributes = [];
-
   if (isQuantized) {
     componentDatatype = ComponentDatatype.UNSIGNED_SHORT;
   } else if (isQuantizedDraco) {
@@ -488,16 +549,6 @@ function createResources(pointCloud, frameState) {
   } else {
     componentDatatype = ComponentDatatype.FLOAT;
   }
-
-  attributes.push({
-    index: positionLocation,
-    vertexBuffer: positionsVertexBuffer,
-    componentsPerAttribute: 3,
-    componentDatatype: componentDatatype,
-    normalize: false,
-    offsetInBytes: 0,
-    strideInBytes: 0,
-  });
 
   if (pointCloud._cull) {
     if (isQuantized || isQuantizedDraco) {
@@ -515,7 +566,7 @@ function createResources(pointCloud, frameState) {
   if (hasColors) {
     if (isRGB565) {
       attributes.push({
-        index: colorLocation,
+        index: colorLocation + attributeOffset,
         vertexBuffer: colorsVertexBuffer,
         componentsPerAttribute: 1,
         componentDatatype: ComponentDatatype.UNSIGNED_SHORT,
@@ -526,7 +577,7 @@ function createResources(pointCloud, frameState) {
     } else {
       const colorComponentsPerAttribute = isTranslucent ? 4 : 3;
       attributes.push({
-        index: colorLocation,
+        index: colorLocation + attributeOffset,
         vertexBuffer: colorsVertexBuffer,
         componentsPerAttribute: colorComponentsPerAttribute,
         componentDatatype: ComponentDatatype.UNSIGNED_BYTE,
@@ -553,7 +604,7 @@ function createResources(pointCloud, frameState) {
     }
     attributes.push({
       index: normalLocation,
-      vertexBuffer: normalsVertexBuffer,
+      vertexBuffer: normalsVertexBuffer + attributeOffset,
       componentsPerAttribute: componentsPerAttribute,
       componentDatatype: componentDatatype,
       normalize: false,
@@ -565,7 +616,7 @@ function createResources(pointCloud, frameState) {
   if (hasBatchIds) {
     attributes.push({
       index: batchIdLocation,
-      vertexBuffer: batchIdsVertexBuffer,
+      vertexBuffer: batchIdsVertexBuffer + attributeOffset,
       componentsPerAttribute: 1,
       componentDatatype: ComponentDatatype.fromTypedArray(batchIds.typedArray),
       normalize: false,
@@ -793,6 +844,7 @@ function createShaders(pointCloud, frameState, style) {
   const context = frameState.context;
   const hasStyle = defined(style);
   const isQuantized = pointCloud._isQuantized;
+  const doublePrecision = pointCloud._doublePrecision;
   const isQuantizedDraco = pointCloud._isQuantizedDraco;
   const isOctEncoded16P = pointCloud._isOctEncoded16P;
   const isOctEncodedDraco = pointCloud._isOctEncodedDraco;
@@ -923,14 +975,20 @@ function createShaders(pointCloud, frameState, style) {
   const attributeLocations = {
     a_position: positionLocation,
   };
+  let attributeOffset = 0;
+
+  if (doublePrecision) {
+    attributeOffset++;
+    attributeLocations.a_positionLow = positionLocation + attributeOffset;
+  }
   if (usesColors) {
-    attributeLocations.a_color = colorLocation;
+    attributeLocations.a_color = colorLocation + attributeOffset;
   }
   if (usesNormals) {
-    attributeLocations.a_normal = normalLocation;
+    attributeLocations.a_normal = normalLocation + attributeOffset;
   }
   if (hasBatchIds) {
-    attributeLocations.a_batchId = batchIdLocation;
+    attributeLocations.a_batchId = batchIdLocation + attributeOffset;
   }
 
   let attributeDeclarations = "";
@@ -956,6 +1014,7 @@ function createShaders(pointCloud, frameState, style) {
 
   let vs =
     "attribute vec3 a_position; \n" +
+    "attribute vec3 a_positionLow; \n" +
     "varying vec4 v_color; \n" +
     "uniform vec4 u_pointSizeAndTimeAndGeometricErrorAndDepthMultiplier; \n" +
     "uniform vec4 u_constantColor; \n" +
@@ -1047,6 +1106,14 @@ function createShaders(pointCloud, frameState, style) {
   if (isQuantized || isQuantizedDraco) {
     vs +=
       "    vec3 position = a_position * u_quantizedVolumeScaleAndOctEncodedRange.xyz; \n";
+  } else if (doublePrecision) {
+    vs += "    vec3 t1 = a_positionLow; \n";
+    vs += "    vec3 e = t1 - a_positionLow; \n";
+    vs += "    vec3 t2 = ((-e) + (a_positionLow - (t1 - e))) + a_position; \n";
+    vs += "    vec3 high_delta = t1 + t2; \n";
+    vs += "    vec3 low_delta = t2 - (high_delta - t1); \n";
+    vs +=
+      "    vec3 position = high_delta + low_delta + vec3(2.0, 2.0, 2.0); \n";
   } else {
     vs += "    vec3 position = a_position; \n";
   }
