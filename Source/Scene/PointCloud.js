@@ -717,6 +717,23 @@ function createUniformMap(pointCloud, frameState) {
 
       return scratch;
     },
+    u_eyePosHigh: function () {
+      const pEye = frameState.camera.position;
+      return new Cartesian3(
+        Math.fround(pEye.x),
+        Math.fround(pEye.y),
+        Math.fround(pEye.z)
+      );
+    },
+    u_eyePosLow: function () {
+      const pEye = frameState.camera.position;
+      return new Cartesian3(
+        pEye.x - Math.fround(pEye.x),
+        pEye.y - Math.fround(pEye.y),
+        pEye.z - Math.fround(pEye.z)
+      );
+      //return Math.fround(frameState.camera.position - Math.fround(frameState.camera.position))
+    },
     u_highlightColor: function () {
       return pointCloud._highlightColor;
     },
@@ -1019,6 +1036,7 @@ function createShaders(pointCloud, frameState, style) {
     "uniform vec4 u_pointSizeAndTimeAndGeometricErrorAndDepthMultiplier; \n" +
     "uniform vec4 u_constantColor; \n" +
     "uniform vec4 u_highlightColor; \n";
+
   vs += "float u_pointSize; \n" + "float u_time; \n";
 
   if (attenuation) {
@@ -1107,12 +1125,16 @@ function createShaders(pointCloud, frameState, style) {
     vs +=
       "    vec3 position = a_position * u_quantizedVolumeScaleAndOctEncodedRange.xyz; \n";
   } else if (doublePrecision) {
-    vs += "    vec3 t1 = a_positionLow; \n";
+    vs +=
+      "    vec3 position = czm_translateRelativeToEye(a_position, a_positionLow).xyz; \n";
+    /*vs += "    vec3 t1 = a_positionLow - u_eyePosLow; \n";
     vs += "    vec3 e = t1 - a_positionLow; \n";
-    vs += "    vec3 t2 = ((-e) + (a_positionLow - (t1 - e))) + a_position; \n";
+    vs += "    vec3 t2 = ((-u_eyePosLow - e) + (a_positionLow - (t1 - e))) + a_position - u_eyePosHigh; \n";
     vs += "    vec3 high_delta = t1 + t2; \n";
     vs += "    vec3 low_delta = t2 - (high_delta - t1); \n";
-    vs += "    vec3 position = high_delta + low_delta; \n";
+    vs += "    vec3 position = high_delta + low_delta; \n";*/
+
+    //vs += "    vec3 position = a_position; \n";
   } else {
     vs += "    vec3 position = a_position; \n";
   }
@@ -1166,9 +1188,14 @@ function createShaders(pointCloud, frameState, style) {
       "    color.xyz *= diffuseStrength * czm_lightColor; \n";
   }
 
-  vs +=
-    "    v_color = color; \n" +
-    "    gl_Position = czm_modelViewProjection * vec4(position, 1.0); \n";
+  vs += "    v_color = color; \n";
+
+  if (doublePrecision) {
+    vs +=
+      "    gl_Position = czm_modelViewProjectionRelativeToEye * vec4(position, 1.0); \n";
+  } else {
+    vs += "    gl_Position = czm_modelViewProjection * vec4(position, 1.0); \n";
+  }
 
   if (usesNormals && backFaceCulling) {
     vs +=
